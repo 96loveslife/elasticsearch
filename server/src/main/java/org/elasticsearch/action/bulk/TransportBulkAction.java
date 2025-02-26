@@ -44,6 +44,7 @@ import org.elasticsearch.cluster.metadata.MappingMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.routing.IndexRouting;
 import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
@@ -448,7 +449,7 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
     /**
      * retries on retryable cluster blocks, resolves item requests,
      * constructs shard bulk requests and delegates execution to shard bulk action
-     * */
+     */
     private final class BulkOperation extends ActionRunnable<BulkResponse> {
         private final Task task;
         private BulkRequest bulkRequest; // set to null once all requests are sent out
@@ -482,6 +483,7 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                 return;
             }
             final ConcreteIndices concreteIndices = new ConcreteIndices(clusterState, indexNameExpressionResolver);
+            final Map<Index, String> bulkIndexRoutingMap = new HashMap<>(6);
             Metadata metadata = clusterState.metadata();
             // Group the requests by ShardId -> Operations mapping
             Map<ShardId, List<BulkItemRequest>> requestsByShard = new HashMap<>();
@@ -505,8 +507,8 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                     // the validation needs to be performed here too.
                     IndexAbstraction indexAbstraction = clusterState.getMetadata().getIndicesLookup().get(concreteIndex.getName());
                     if (indexAbstraction.getParentDataStream() != null &&
-                    // avoid valid cases when directly indexing into a backing index
-                    // (for example when directly indexing into .ds-logs-foobar-000001)
+                        // avoid valid cases when directly indexing into a backing index
+                        // (for example when directly indexing into .ds-logs-foobar-000001)
                         concreteIndex.getName().equals(docWriteRequest.index()) == false
                         && docWriteRequest.opType() != DocWriteRequest.OpType.CREATE) {
                         throw new IllegalArgumentException("only write ops with an op_type of create are allowed in data streams");
@@ -522,6 +524,14 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                             MappingMetadata mappingMd = indexMetadata.mappingOrDefault();
                             Version indexCreated = indexMetadata.getCreationVersion();
                             indexRequest.resolveRouting(metadata);
+                            if (indexMetadata.isBulkRoutingEnabled() && indexRequest.routing() == null) {
+                                String routing = bulkIndexRoutingMap.get(concreteIndex);
+                                if (routing == null) {
+                                    routing = UUIDs.randomBase64UUID().substring(16);
+                                    bulkIndexRoutingMap.put(concreteIndex, routing);
+                                }
+                                indexRequest.routing(routing);
+                            }
                             indexRequest.process(indexCreated, mappingMd, concreteIndex.getName());
                             break;
                         case UPDATE:

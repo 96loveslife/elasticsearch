@@ -44,6 +44,7 @@ import java.util.Set;
 
 /**
  * Encapsulates all valid index level settings.
+ *
  * @see Property#IndexScope
  */
 public final class IndexScopedSettings extends AbstractScopedSettings {
@@ -75,6 +76,7 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
                 IndexMetadata.INDEX_HIDDEN_SETTING,
                 IndexMetadata.INDEX_ROLLUP_SOURCE_NAME,
                 IndexMetadata.INDEX_ROLLUP_SOURCE_UUID,
+                IndexMetadata.INDEX_BULK_ROUTING_ENABLED_SETTING,
                 SearchSlowLog.INDEX_SEARCH_SLOWLOG_THRESHOLD_FETCH_DEBUG_SETTING,
                 SearchSlowLog.INDEX_SEARCH_SLOWLOG_THRESHOLD_FETCH_WARN_SETTING,
                 SearchSlowLog.INDEX_SEARCH_SLOWLOG_THRESHOLD_FETCH_INFO_SETTING,

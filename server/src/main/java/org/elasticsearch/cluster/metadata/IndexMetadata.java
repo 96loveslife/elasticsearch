@@ -402,6 +402,18 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
         Setting.Property.Final
     );
 
+
+    /**
+     * 控制当前索引bulk是否设置同一routing值
+     */
+    private static final String INDEX_BULK_ROUTING_ENABLED = "index.bulk.routing.enabled";
+    public static final Setting<Boolean> INDEX_BULK_ROUTING_ENABLED_SETTING = Setting.boolSetting(
+        INDEX_BULK_ROUTING_ENABLED,
+        false,
+        Setting.Property.Dynamic,
+        Setting.Property.IndexScope
+    );
+
     public static final String KEY_IN_SYNC_ALLOCATIONS = "in_sync_allocations";
     static final String KEY_VERSION = "version";
     static final String KEY_MAPPING_VERSION = "mapping_version";
@@ -473,6 +485,9 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
 
     private final boolean ignoreDiskWatermarks;
 
+    private final boolean bulkRoutingEnabled;
+
+
     @Nullable // since we store null if DataTier.TIER_PREFERENCE_SETTING failed validation
     private final List<String> tierPreference;
 
@@ -506,6 +521,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
         final int priority,
         final long creationDate,
         final boolean ignoreDiskWatermarks,
+        final boolean bulkRoutingEnabled,
         @Nullable final List<String> tierPreference
     ) {
 
@@ -546,6 +562,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
         this.creationDate = creationDate;
         this.ignoreDiskWatermarks = ignoreDiskWatermarks;
         this.tierPreference = tierPreference;
+        this.bulkRoutingEnabled = bulkRoutingEnabled;
         assert numberOfShards * routingFactor == routingNumShards : routingNumShards + " must be a multiple of " + numberOfShards;
     }
 
@@ -569,6 +586,10 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
         return otherUUID.equals(getIndexUUID());
     }
 
+    public boolean isBulkRoutingEnabled() {
+        return bulkRoutingEnabled;
+    }
+
     public long getVersion() {
         return this.version;
     }
@@ -588,7 +609,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
     /**
      * The term of the current selected primary. This is a non-negative number incremented when
      * a primary shard is assigned after a full cluster restart or a replica shard is promoted to a primary.
-     *
+     * <p>
      * Note: since we increment the term every time a shard is assigned, the term for any operational shard (i.e., a shard
      * that can be indexed into) is larger than 0. See {@link IndexMetadataUpdater#applyChanges}.
      **/
@@ -665,6 +686,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
      * Return an object that maps each type to the associated mappings.
      * The return value is never {@code null} but may be empty if the index
      * has no mappings.
+     *
      * @deprecated Use {@link #mapping()} instead now that indices have a single type
      */
     @Deprecated
@@ -1514,7 +1536,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
             }
 
             final String uuid = settings.get(SETTING_INDEX_UUID, INDEX_UUID_NA_VALUE);
-
+            final boolean bulkRoutingEnabled = settings.getAsBoolean(INDEX_BULK_ROUTING_ENABLED, false);
             List<String> tierPreference;
             try {
                 tierPreference = DataTier.parseTierList(DataTier.TIER_PREFERENCE_SETTING.get(settings));
@@ -1556,6 +1578,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
                 IndexMetadata.INDEX_PRIORITY_SETTING.get(settings),
                 settings.getAsLong(SETTING_CREATION_DATE, -1L),
                 DiskThresholdDecider.SETTING_IGNORE_DISK_WATERMARKS.get(settings),
+                bulkRoutingEnabled,
                 tierPreference
             );
         }
@@ -1846,6 +1869,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
     }
 
     private static final ToXContent.Params FORMAT_PARAMS;
+
     static {
         Map<String, String> params = new HashMap<>(2);
         params.put("binary", "true");
@@ -1890,9 +1914,10 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
 
     /**
      * Returns the source shard ID to split the given target shard off
-     * @param shardId the id of the target shard to split into
+     *
+     * @param shardId             the id of the target shard to split into
      * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
+     * @param numTargetShards     the total number of shards in the target index
      * @return a the source shard ID to split off from
      */
     public static ShardId selectSplitShard(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
@@ -1909,9 +1934,10 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
 
     /**
      * Returns the source shard ID to clone the given target shard off
-     * @param shardId the id of the target shard to clone into
+     *
+     * @param shardId             the id of the target shard to clone into
      * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
+     * @param numTargetShards     the total number of shards in the target index
      * @return a the source shard ID to clone from
      */
     public static ShardId selectCloneShard(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
@@ -1956,9 +1982,10 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
 
     /**
      * Selects the source shards for a local shard recovery. This might either be a split or a shrink operation.
-     * @param shardId the target shard ID to select the source shards for
+     *
+     * @param shardId             the target shard ID to select the source shards for
      * @param sourceIndexMetadata the source metadata
-     * @param numTargetShards the number of target shards
+     * @param numTargetShards     the number of target shards
      */
     public static Set<ShardId> selectRecoverFromShards(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
         if (sourceIndexMetadata.getNumberOfShards() > numTargetShards) {
@@ -1972,9 +1999,10 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
 
     /**
      * Returns the source shard ids to shrink into the given shard id.
-     * @param shardId the id of the target shard to shrink to
+     *
+     * @param shardId             the id of the target shard to shrink to
      * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
+     * @param numTargetShards     the total number of shards in the target index
      * @return a set of shard IDs to shrink into the given shard ID.
      */
     public static Set<ShardId> selectShrinkShards(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
@@ -2010,7 +2038,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
      * @param targetNumberOfShards the total number of shards in the target index
      * @return the routing factor for and shrunk index with the given number of target shards.
      * @throws IllegalArgumentException if the number of source shards is less than the number of target shards or if the source shards
-     * are not divisible by the number of target shards.
+     *                                  are not divisible by the number of target shards.
      */
     public static int getRoutingFactor(int sourceNumberOfShards, int targetNumberOfShards) {
         final int factor;
@@ -2039,8 +2067,9 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
      * E.g.
      * - For ".ds-logs-000002" it will return 2
      * - For "&lt;logs-{now/d}-3&gt;" it'll return 3
+     *
      * @throws IllegalArgumentException if the index doesn't contain a "-" separator or if the last token after the separator is not a
-     * number
+     *                                  number
      */
     public static int parseIndexNameCounter(String indexName) {
         int numberIndex = indexName.lastIndexOf("-");
