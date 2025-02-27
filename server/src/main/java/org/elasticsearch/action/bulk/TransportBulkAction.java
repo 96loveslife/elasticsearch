@@ -66,6 +66,7 @@ import org.elasticsearch.threadpool.ThreadPool.Names;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -75,6 +76,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.SortedMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -482,6 +484,7 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
             if (handleBlockExceptions(clusterState)) {
                 return;
             }
+
             final ConcreteIndices concreteIndices = new ConcreteIndices(clusterState, indexNameExpressionResolver);
             final Map<Index, String> bulkIndexRoutingMap = new HashMap<>(6);
             Metadata metadata = clusterState.metadata();
@@ -582,7 +585,10 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
             }
 
             final AtomicInteger counter = new AtomicInteger(requestsByShard.size());
+            final ConcurrentLinkedQueue<ShardExecutionMetrics> shardMetrics = new ConcurrentLinkedQueue<>();
             String nodeId = clusterService.localNode().getId();
+            final int items = bulkRequest.requests().size();
+            final long size = bulkRequest.estimatedSizeInBytes();
             for (Map.Entry<ShardId, List<BulkItemRequest>> entry : requestsByShard.entrySet()) {
                 final ShardId shardId = entry.getKey();
                 final List<BulkItemRequest> requests = entry.getValue();
@@ -598,8 +604,18 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                     bulkShardRequest.setParentTask(nodeId, task.getId());
                 }
                 shardBulkAction.execute(bulkShardRequest, new ActionListener<BulkShardResponse>() {
+                    final long shardStart = System.nanoTime();
+                    final ShardId shard = bulkShardRequest.shardId();
+                    final String index = bulkShardRequest.index();
+
                     @Override
                     public void onResponse(BulkShardResponse bulkShardResponse) {
+                        long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - shardStart);
+                        shardMetrics.add(new ShardExecutionMetrics(
+                            index,
+                            shard.getId(),
+                            duration
+                        ));
                         for (BulkItemResponse bulkItemResponse : bulkShardResponse.getResponses()) {
                             // we may have no response if item failed
                             if (bulkItemResponse.getResponse() != null) {
@@ -614,6 +630,12 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
 
                     @Override
                     public void onFailure(Exception e) {
+                        long duration = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - shardStart);
+                        shardMetrics.add(new ShardExecutionMetrics(
+                            index,
+                            shard.getId(),
+                            duration
+                        ));
                         // create failures for all relevant requests
                         for (BulkItemRequest request : requests) {
                             final String indexName = concreteIndices.getConcreteIndex(request.index()).getName();
@@ -632,6 +654,15 @@ public class TransportBulkAction extends HandledTransportAction<BulkRequest, Bul
                     }
 
                     private void finishHim() {
+                        ShardExecutionMetrics maxShard = shardMetrics.stream()
+                            .max(Comparator.comparingLong(ShardExecutionMetrics::getDurationMillis))
+                            .orElse(null);
+                        double avg = shardMetrics.stream().mapToLong(ShardExecutionMetrics::getDurationMillis).average().orElse(0);
+                        long totalMills = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTimeNanos);
+                        logger.info("bulkDetail||size={}||items={}||totalMills={}||maxShard={}||max={}||avg={}",
+                            size, items, totalMills,
+                            (maxShard != null) ? maxShard.indexName + "[" + maxShard.shardId + "]" : "N/A",
+                            (maxShard != null) ? maxShard.getDurationMillis() : 0, avg);
                         listener.onResponse(
                             new BulkResponse(responses.toArray(new BulkItemResponse[responses.length()]), buildTookInMillis(startTimeNanos))
                         );
